@@ -627,7 +627,7 @@ public:
         cudaStream_t stream = at::cuda::getCurrentCUDAStream();
 
         if (dtype == torch::kFloat32) {
-            launch_ppo_loss_forward_float(
+            launch_ppo_loss_forward_optimized_float(
                 loss_output.data_ptr<float>(),
                 saved_for_backward.data_ptr<double>(),
                 logits.data_ptr<float>(),
@@ -648,7 +648,7 @@ public:
                 stream
             );
         } else if (dtype == torch::kBFloat16) {
-            launch_ppo_loss_forward_bf16(
+            launch_ppo_loss_forward_optimized_bf16(
                 loss_output.data_ptr<float>(),
                 saved_for_backward.data_ptr<double>(),
                 logits.data_ptr<at::BFloat16>(),
@@ -736,18 +736,18 @@ public:
 
         // TODO: Why are we passing grad loss in float?
         if (dtype == torch::kFloat32) {
-            launch_ppo_loss_backward_float(
+            launch_ppo_loss_backward_optimized_float(
                 grad_logits.data_ptr<float>(),
                 grad_values_pred.data_ptr<float>(),
                 grad_loss.data_ptr<float>(),
                 logits.data_ptr<float>(),
+                values_pred.data_ptr<float>(),
                 actions.data_ptr<int64_t>(),
                 old_logprobs.data_ptr<float>(),
                 advantages.data_ptr<float>(),
                 prio.data_ptr<float>(),
                 values.data_ptr<float>(),
                 returns.data_ptr<float>(),
-                saved_for_backward.data_ptr<double>(),
                 adv_mean.data_ptr<float>(),
                 adv_std.data_ptr<float>(),
                 clip_coef, vf_clip_coef,
@@ -756,18 +756,18 @@ public:
                 stream
             );
         } else if (dtype == torch::kBFloat16) {
-            launch_ppo_loss_backward_bf16(
+            launch_ppo_loss_backward_optimized_bf16(
                 grad_logits.data_ptr<at::BFloat16>(),
                 grad_values_pred.data_ptr<at::BFloat16>(),
                 grad_loss.data_ptr<float>(),
                 logits.data_ptr<at::BFloat16>(),
+                values_pred.data_ptr<at::BFloat16>(),
                 actions.data_ptr<int64_t>(),
                 old_logprobs.data_ptr<at::BFloat16>(),
                 advantages.data_ptr<at::BFloat16>(),
                 prio.data_ptr<at::BFloat16>(),
                 values.data_ptr<at::BFloat16>(),
                 returns.data_ptr<at::BFloat16>(),
-                saved_for_backward.data_ptr<double>(),
                 adv_mean.data_ptr<float>(),
                 adv_std.data_ptr<float>(),
                 clip_coef, vf_clip_coef,

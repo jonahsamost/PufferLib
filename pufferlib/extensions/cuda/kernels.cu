@@ -1715,6 +1715,8 @@ inline void launch_ppo_loss_forward_optimized(
     int N,
     cudaStream_t stream
 ) {
+    cudaMemsetAsync(loss_output, 0, sizeof(float), stream);
+
     int total = N * T_seq;
     int grid = (total + PPO_THREADS - 1) / PPO_THREADS;
     ppo_loss_forward_kernel_optimized<T><<<grid, PPO_THREADS, 0, stream>>>(
@@ -2092,6 +2094,8 @@ inline void launch_ppo_loss_forward(
     int N,
     cudaStream_t stream
 ) {
+    cudaMemsetAsync(loss_output, 0, sizeof(float), stream);
+
     int total_elements = N * T_seq;
     int grid = grid_size(total_elements);
 
