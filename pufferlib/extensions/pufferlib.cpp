@@ -26,6 +26,7 @@
 #include <functional>
 #include <iostream>
 #include <vector>
+#include <cmath>
 
 typedef torch::Tensor Tensor;
 
@@ -394,87 +395,59 @@ void train_forward_call(GraphBuf& graph, PolicyMinGRU* policy,
         torch::optim::Muon* muon, HypersT& hypers, Tensor& adv_mean, Tensor& adv_std, bool kernels) {
     auto [logits, newvalue] = policy->forward_train(graph.mb_obs.to(DTYPE), graph.mb_state);
 
+    // Ensure all tensors are contiguous for kernel compatibility
+    Tensor logits_c = logits.contiguous();
+    Tensor newvalue_c = newvalue.contiguous();
+    Tensor actions_c = graph.mb_actions.contiguous();
+    Tensor logprobs_c = graph.mb_logprobs.to(logits.dtype()).contiguous();
+    Tensor advantages_c = graph.mb_advantages.to(logits.dtype()).contiguous();
+    Tensor prio_c = graph.mb_prio.to(logits.dtype()).contiguous();
+    Tensor values_c = graph.mb_values.to(logits.dtype()).contiguous();
+    Tensor returns_c = graph.mb_returns.to(logits.dtype()).contiguous();
+
+    // Compute minibatch mean/std for advantage normalization (same for both paths)
+    Tensor mb_adv_mean = advantages_c.mean();
+    Tensor mb_adv_std = advantages_c.std();
+
     Tensor loss;
     if (kernels) {
-    // if (false) {
         loss = fused_ppo_loss(
-            logits,
-            newvalue,
-            graph.mb_actions,
-            graph.mb_logprobs.to(logits.dtype()),
-            graph.mb_advantages.to(logits.dtype()),
-            graph.mb_prio.to(logits.dtype()),
-            graph.mb_values.to(logits.dtype()),
-            graph.mb_returns.to(logits.dtype()),
-            adv_mean,
-            adv_std,
+            logits_c,
+            newvalue_c,
+            actions_c,
+            logprobs_c,
+            advantages_c,
+            prio_c,
+            values_c,
+            returns_c,
+            mb_adv_mean,
+            mb_adv_std,
             hypers.clip_coef,
             hypers.vf_clip_coef,
             hypers.vf_coef,
             hypers.ent_coef
         )[0];
     } else {
-        // Flatten for action lookup
-        Tensor flat_logits = logits.reshape({-1, logits.size(-1)});
-        Tensor flat_actions = graph.mb_actions.reshape({-1});
-        Tensor logprobs_new = torch::log_softmax(flat_logits, 1);
-        Tensor probs_new = logprobs_new.exp();
-
-        // Gather logprobs for taken actions
-        Tensor newlogprob_flat = logprobs_new.gather(1, flat_actions.unsqueeze(1)).squeeze(1);
-        Tensor newlogprob = newlogprob_flat.reshape({hypers.minibatch_segments, hypers.horizon});
-        Tensor entropy = - (probs_new * logprobs_new).sum(1).mean();
-
-        // Compute ratio
-        Tensor logratio = newlogprob - graph.mb_logprobs;
-        Tensor ratio_new = logratio.exp();
-        graph.mb_ratio.copy_(ratio_new, false);
-        graph.mb_newvalue.copy_(newvalue, false);
-
-        // Normalize advantages: (adv - mean) / std, then weight
-        Tensor adv_normalized = graph.mb_advantages;
-        adv_normalized = graph.mb_prio * (adv_normalized - adv_normalized.mean()) / (adv_normalized.std() + 1e-8);
-
-        // Policy loss
-        Tensor pg_loss1 = -adv_normalized * ratio_new;
-        Tensor pg_loss2 = -adv_normalized * torch::clamp(ratio_new, 1.0 - hypers.clip_coef, 1.0 + hypers.clip_coef);
-        Tensor pg_loss = torch::max(pg_loss1, pg_loss2).mean();
-
-        // Value loss
-        newvalue = newvalue.view(graph.mb_returns.sizes());
-        Tensor v_clipped = graph.mb_values + torch::clamp(newvalue - graph.mb_values,
-            -hypers.vf_clip_coef, hypers.vf_clip_coef);
-        Tensor v_loss_unclipped = (newvalue - graph.mb_returns).pow(2);
-        Tensor v_loss_clipped = (v_clipped - graph.mb_returns).pow(2);
-        Tensor v_loss = 0.5 * torch::max(v_loss_unclipped, v_loss_clipped).mean();
-
-        // Total loss
-        loss = pg_loss + hypers.vf_coef*v_loss - hypers.ent_coef*entropy;
-        /*
-        {
-            torch::NoGradGuard no_grad;
-
-            // Accumulate stats
-            pg_sum += pg_loss.detach();
-            v_sum += v_loss.detach();
-            ent_sum += entropy.detach();
-            total_sum += loss.detach();
-
-            // KL and clipping diagnostics (matches Python)
-            auto old_kl = (-logratio).mean();
-            auto kl = ((ratio_new - 1) - logratio).mean();
-            auto cf = (ratio_new - 1.0).abs().gt(hypers.clip_coef).to(torch::kFloat32).mean();
-            auto imp = ratio_new.mean();
-
-            old_approx_kl_sum += old_kl.detach();
-            approx_kl_sum += kl.detach();
-            clipfrac_sum += cf.detach();
-            importance_sum += imp.detach();
-        }
-        */
+        loss = fused_ppo_loss_cpp(
+            logits_c,
+            newvalue_c,
+            actions_c,
+            logprobs_c,
+            advantages_c,
+            prio_c,
+            values_c,
+            returns_c,
+            mb_adv_mean,
+            mb_adv_std,
+            hypers.clip_coef,
+            hypers.vf_clip_coef,
+            hypers.vf_coef,
+            hypers.ent_coef
+        );
     }
-
+    
     loss.backward();
+    
     clip_grad_norm_(policy->parameters(), hypers.max_grad_norm);
     muon->step();
     muon->zero_grad();

@@ -923,7 +923,8 @@ torch::Tensor fused_ppo_loss_cpp(
     auto logratio = newlogprob - old_logprobs;
     auto ratio_new = logratio.exp();
 
-    auto adv_normalized = prio.unsqueeze(1) * (advantages - adv_mean) / (adv_std + 1e-8);
+    auto prio_2d = (prio.dim() == 1) ? prio.unsqueeze(1) : prio;
+    auto adv_normalized = prio_2d * (advantages - advantages.mean()) / (advantages.std() + 1e-8);
     auto pg_loss1 = -adv_normalized * ratio_new;
     auto pg_loss2 = -adv_normalized * torch::clamp(ratio_new, 1.0 - clip_coef, 1.0 + clip_coef);
     auto pg_loss = torch::max(pg_loss1, pg_loss2).mean();

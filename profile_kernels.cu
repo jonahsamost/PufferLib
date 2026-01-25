@@ -1780,7 +1780,7 @@ void free_trainforwardargs(TrainForwardArgs* args) {
 }
 
 void run_train_forward_call(TrainForwardArgs* args) {
-    train_forward_call(args->graph, args->policy.get(), args->muon, args->hypers, args->adv_mean, args->adv_std);
+    train_forward_call(args->graph, args->policy.get(), args->muon, args->hypers, args->adv_mean, args->adv_std, args->use_kernels);
 }
 
 #endif
@@ -2012,11 +2012,11 @@ int main(int argc, char** argv) {
     // Using typical breakout settings: INPUT_SIZE=96, H=128, A=4
 
     if (strcmp(profile, "kernels") == 0 || strcmp(profile, "all") == 0) {
-        profile_mingrugate(BR, H);
-        profile_logcoeffsandvalues(BT, T, H);
-        profile_logcumsumexp(BT, T, H);
-        profile_fusedscan(BT, T, H);
-        profile_samplelogits(BR, A);
+        // profile_mingrugate(BR, H);
+        // profile_logcoeffsandvalues(BT, T, H);
+        // profile_logcumsumexp(BT, T, H);
+        // profile_fusedscan(BT, T, H);
+        // profile_samplelogits(BR, A);
         profile_ppoloss(BT, T, A);
     }
 

@@ -1486,11 +1486,16 @@ __global__ void ppo_loss_forward_kernel_optimized(
     int A,
     int N
 ) {
+    int tid = threadIdx.x;
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int total_elements = N * T_seq;
-    if (idx >= total_elements) return;
-
+    
     __shared__ float block_loss[PPO_THREADS];
+    
+    if (idx >= total_elements) {
+        block_loss[tid] = 0.0f;
+        return;
+    }
 
     int n = idx / T_seq;
     int t = idx % T_seq;
@@ -1555,7 +1560,6 @@ __global__ void ppo_loss_forward_kernel_optimized(
 
     float thread_loss = (pg_loss + vf_coef * v_loss - ent_coef * entropy) / float(total_elements);
 
-    int tid = threadIdx.x;
     block_loss[tid] = thread_loss;
     __syncthreads();
 
@@ -1687,7 +1691,7 @@ __global__ void ppo_loss_backward_kernel_optimized(
         float d_logit = (a == act) ? d_new_logp : 0.0f;
         d_logit -= p * d_new_logp;
 
-        d_logit += d_entropy_term * p * (entropy - logp);
+        d_logit += d_entropy_term * p * (-entropy - logp);
         grad_logits[logits_offset + a] = T(d_logit);
     }
 }
