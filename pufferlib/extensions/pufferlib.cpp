@@ -396,9 +396,6 @@ void train_impl(PuffeRL& pufferl) {
     rollouts.ratio.fill_(1.0);
 
     Tensor advantages = torch::zeros_like(rollouts.values, torch::kFloat32);  // fp32 precision
-    compute_puff_advantage_cuda(rollouts.values, rollouts.rewards, rollouts.terminals,
-        rollouts.ratio, advantages, hypers.gamma, hypers.gae_lambda,
-        hypers.vtrace_rho_clip, hypers.vtrace_c_clip);
 
     Tensor mb_state = torch::zeros(
         {hypers.num_layers, minibatch_segments, 1, (int64_t)hypers.hidden_size},
@@ -413,28 +410,52 @@ void train_impl(PuffeRL& pufferl) {
     for (int mb = 0; mb < total_minibatches; ++mb) {
         cudaEventRecord(pufferl.profile.events[2]);  // start of misc (overwritten each iter)
         advantages.fill_(0.0);
-        compute_puff_advantage_cuda(rollouts.values, rollouts.rewards, rollouts.terminals,
-            rollouts.ratio, advantages, hypers.gamma, hypers.gae_lambda,
-            hypers.vtrace_rho_clip, hypers.vtrace_c_clip);
 
         profile_begin("compute_advantage", hypers.profile);
         compute_advantage(rollouts, advantages, hypers);
         profile_end(hypers.profile);
 
-        profile_begin("compute_prio", hypers.profile);
-        auto [idx, mb_prio] = compute_prio(advantages, prio_alpha, minibatch_segments,
-                                            hypers.total_agents, anneal_beta);
-        profile_end(hypers.profile);
+        Tensor idx;
+        if (hypers.kernels) {
+            profile_begin("compute_prio", hypers.profile);
+            auto [idx_, mb_prio] = compute_prio(advantages, prio_alpha, minibatch_segments,
+                                                hypers.total_agents, anneal_beta);
+            idx = idx_;
+            profile_end(hypers.profile);
 
-        profile_begin("train_select_and_copy", hypers.profile);
-        train_select_and_copy_cuda(
-            rollouts.observations, rollouts.actions, rollouts.logprobs,
-            rollouts.values, advantages,
-            idx, mb_prio,
-            graph.mb_obs, graph.mb_state, graph.mb_actions,
-            graph.mb_logprobs, graph.mb_advantages, graph.mb_prio,
-            graph.mb_values, graph.mb_returns);
-        profile_end(hypers.profile);
+            profile_begin("train_select_and_copy", hypers.profile);
+            train_select_and_copy_cuda(
+                rollouts.observations, rollouts.actions, rollouts.logprobs,
+                rollouts.values, advantages,
+                idx, mb_prio,
+                graph.mb_obs, graph.mb_state, graph.mb_actions,
+                graph.mb_logprobs, graph.mb_advantages, graph.mb_prio,
+                graph.mb_values, graph.mb_returns);
+            profile_end(hypers.profile);
+        } else {
+            Tensor adv = advantages.abs().sum(1);
+            Tensor prio_weights = adv.pow(prio_alpha).nan_to_num_(0.0, 0.0, 0.0);
+            Tensor prio_probs = (prio_weights + 1e-6)/(prio_weights.sum() + 1e-6);
+            idx = at::multinomial(prio_probs, minibatch_segments, true);
+            Tensor mb_prio = torch::pow(hypers.total_agents*prio_probs.index_select(0, idx).unsqueeze(1), -anneal_beta);
+    
+            Tensor mb_obs = rollouts.observations.index_select(0, idx);
+            Tensor mb_actions = rollouts.actions.index_select(0, idx);
+            Tensor mb_logprobs = rollouts.logprobs.index_select(0, idx);
+            Tensor mb_values = rollouts.values.index_select(0, idx);
+            Tensor mb_advantages = advantages.index_select(0, idx);
+            Tensor mb_returns = mb_advantages + mb_values;
+    
+            mb_state.zero_();
+            graph.mb_obs.copy_(mb_obs, false);
+            graph.mb_state.copy_(mb_state, false);
+            graph.mb_actions.copy_(mb_actions, false);
+            graph.mb_logprobs.copy_(mb_logprobs, false);
+            graph.mb_advantages.copy_(mb_advantages, false);
+            graph.mb_prio.copy_(mb_prio, false);
+            graph.mb_values.copy_(mb_values, false);
+            graph.mb_returns.copy_(mb_returns, false);
+        }
 
         cudaEventRecord(pufferl.profile.events[3]);  // end misc / start forward
         if (pufferl.train_captured) {

@@ -600,7 +600,8 @@ void launch_select_copy(
     torch::Tensor& dst_returns,
     torch::Tensor& mb_prio, torch::Tensor& dst_prio
 ) {
-    select_copy_kernel<T><<<dim3(mb_segs, 5), SELECT_COPY_THREADS>>>(
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    select_copy_kernel<T><<<dim3(mb_segs, 5), SELECT_COPY_THREADS, 0, stream>>>(
         idx.data_ptr<int64_t>(),
         (const char*)observations.data_ptr(), (char*)dst_obs.data_ptr(), obs_row_bytes,
         (const char*)actions.data_ptr(), (char*)dst_actions.data_ptr(), actions_row_bytes,
@@ -608,7 +609,7 @@ void launch_select_copy(
         (const T*)values.data_ptr(), (T*)dst_values.data_ptr(),
         advantages.data_ptr<float>(), dst_advantages.data_ptr<float>(),
         (T*)dst_returns.data_ptr(), horizon,
-        (const T*)mb_prio.data_ptr(), (T*)dst_prio.data_ptr());
+        mb_prio.data_ptr<float>(), (T*)dst_prio.data_ptr());
 }
 
 void train_select_and_copy_cuda(
@@ -650,21 +651,22 @@ std::tuple<torch::Tensor, torch::Tensor> compute_prio_cuda(
 ) {
     int S = advantages.size(0);
     int T = advantages.size(1);
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
 
     auto prio_probs = torch::empty({S}, advantages.options());
 
-    compute_prio_adv_reduction<<<S, PRIO_WARP_SIZE>>>(
+    compute_prio_adv_reduction<<<S, PRIO_WARP_SIZE, 0, stream>>>(
         advantages.data_ptr<float>(), prio_probs.data_ptr<float>(),
         prio_alpha, T);
 
-    compute_prio_normalize<<<1, PRIO_BLOCK_SIZE>>>(
+    compute_prio_normalize<<<1, PRIO_BLOCK_SIZE, 0, stream>>>(
         prio_probs.data_ptr<float>(), S);
 
     auto idx = at::multinomial(prio_probs, minibatch_segments, true);
 
     auto mb_prio = torch::empty({minibatch_segments, 1}, advantages.options());
     int p3_blocks = (minibatch_segments + PRIO_BLOCK_SIZE - 1) / PRIO_BLOCK_SIZE;
-    compute_prio_imp_weights<<<p3_blocks, PRIO_BLOCK_SIZE>>>(
+    compute_prio_imp_weights<<<p3_blocks, PRIO_BLOCK_SIZE, 0, stream>>>(
         idx.data_ptr<int64_t>(), prio_probs.data_ptr<float>(),
         mb_prio.data_ptr<float>(),
         total_agents, anneal_beta, minibatch_segments);

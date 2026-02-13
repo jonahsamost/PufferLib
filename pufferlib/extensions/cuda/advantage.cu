@@ -153,9 +153,10 @@ void compute_puff_advantage_cuda_impl(torch::Tensor values, torch::Tensor reward
     int blocks = (num_steps + threads_per_block - 1) / threads_per_block;
 
     constexpr int N = 16 / sizeof(TIn);
-    auto kernel = (horizon % N == 0 && sizeof(TOut) == 4)
-        ? puff_advantage_kernel<TIn, TOut>
-        : puff_advantage_kernel_scalar<TIn, TOut>;
+    // auto kernel = (horizon % N == 0 && sizeof(TOut) == 4)
+    //     ? puff_advantage_kernel<TIn, TOut>
+    //     : puff_advantage_kernel_scalar<TIn, TOut>;
+    auto kernel = puff_advantage_kernel_scalar<TIn, TOut>;
 
     kernel<<<blocks, threads_per_block>>>(
         values.data_ptr<TIn>(), rewards.data_ptr<TIn>(),

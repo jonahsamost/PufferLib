@@ -1087,7 +1087,7 @@ __device__ __forceinline__ void copy_values_adv_returns(
         float adv = s_adv[i];
         d_values[i] = val;
         d_adv[i] = adv;
-        d_returns[i] = (T)((float)val + adv);
+        d_returns[i] = from_float(to_float(val) + adv);
     }
 }
 
@@ -1100,7 +1100,7 @@ __global__ void select_copy_kernel(
     const T* __restrict__ src_values, T* __restrict__ dst_values,
     const float* __restrict__ src_advantages, float* __restrict__ dst_advantages,
     T* __restrict__ dst_returns, int horizon,
-    const T* __restrict__ src_prio, T* __restrict__ dst_prio
+    const float* __restrict__ src_prio, T* __restrict__ dst_prio
 ) {
     int mb = blockIdx.x;
     int ch = blockIdx.y;
@@ -1122,9 +1122,9 @@ __global__ void select_copy_kernel(
         break;
     case 4:
         if (threadIdx.x == 0) {
-            dst_prio[mb] = src_prio[mb];
-            break;
+            dst_prio[mb] = (T)src_prio[mb];
         }
+        break;
     }
 }
 
